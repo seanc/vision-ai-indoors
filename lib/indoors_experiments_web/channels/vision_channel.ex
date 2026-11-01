@@ -8,33 +8,32 @@ defmodule IndoorsExperimentsWeb.VisionChannel do
   `Pipeline` (its tracks and decision history) lives in this process's
   assigns and is thrown away when the tab goes.
 
-  ## Message format
+  ## Messages
 
-  The browser pushes `"frame"` as a single **binary** message, so the JPEG
-  isn't inflated by base64 (which would add a third to every frame):
-
-      <<header_size::32, header_json::binary-size(header_size), jpeg::binary>>
-
-  `header_json` holds the metadata: `seq` (frame counter), `t` (capture time
-  in ms), `orientation` (or null) and `client` (the browser's timings for
-  the previous frame). We reply to each push with that frame's results. The
-  browser only sends the next frame after the reply arrives, so frames never
-  pile up here if the server is slower than the camera.
+  The browser pushes `"frame"` as a single binary message (the format is in
+  `IndoorsExperimentsWeb.FrameMessage`). We reply to each push with that
+  frame's results. The browser only sends the next frame after the reply
+  arrives, so frames never pile up here if the server is slower than the camera.
 
   The browser can also push `"client_log"` (errors, camera details, status
   changes) so problems on a phone end up in the session's `Recorder` files
   instead of only in a console nobody is looking at.
   """
 
-  use IndoorsExperimentsWeb, :channel
+  # Frames arrive several times a second; logging every one would bury
+  # everything else in the server log.
+  use Phoenix.Channel, log_handle_in: false
   require Logger
 
   alias IndoorsExperiments.Vision.{Detector, Pipeline, Recorder, Zones}
+  alias IndoorsExperimentsWeb.FrameMessage
 
   @impl true
   def join("vision:" <> session_id, params, socket) do
     lane = Zones.lane_outline()
-    recorder = Recorder.start(%{session_id: session_id, client: params}, lane)
+
+    recorder =
+      Recorder.start(%{experiment: "hallway", session_id: session_id, client: params}, lane)
 
     socket =
       socket
@@ -46,7 +45,7 @@ defmodule IndoorsExperimentsWeb.VisionChannel do
 
   @impl true
   def handle_in("frame", {:binary, message}, socket) do
-    case unpack(message) do
+    case FrameMessage.unpack(message) do
       {:ok, meta, jpeg} ->
         started = System.monotonic_time(:microsecond)
         {result, pipeline} = Pipeline.process(socket.assigns.pipeline, jpeg, meta)
@@ -67,14 +66,4 @@ defmodule IndoorsExperimentsWeb.VisionChannel do
     recorder = Recorder.record_event(socket.assigns.recorder, event)
     {:noreply, assign(socket, :recorder, recorder)}
   end
-
-  # Split the binary message back into its header and its JPEG.
-  defp unpack(<<header_size::32, header::binary-size(header_size), jpeg::binary>>) do
-    case Jason.decode(header) do
-      {:ok, meta} -> {:ok, meta, jpeg}
-      {:error, _} -> :error
-    end
-  end
-
-  defp unpack(_other), do: :error
 end

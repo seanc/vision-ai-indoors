@@ -14,8 +14,9 @@ defmodule IndoorsExperiments.Vision.Recorder do
         snapshots/        raw frames, about one per second. These double as a dataset.
         annotated/        the same frames with the overlay drawn on (see `Annotate`)
 
-  Snapshots are taken about once a second, and also whenever the decision
-  changes, because those are the interesting moments.
+  Snapshots are taken about once a second, and also at interesting moments:
+  whenever the hallway decision changes, or the hunt finds something or
+  moves to a new target.
 
   Run `mix vision.report` to turn a session folder into a readable summary
   plus a contact sheet image.
@@ -29,7 +30,7 @@ defmodule IndoorsExperiments.Vision.Recorder do
 
   @snapshot_every_ms 1_000
 
-  defstruct [:root, :dir, :session_info, :lane, last_snapshot_t: nil, last_level: nil]
+  defstruct [:root, :dir, :session_info, :lane, last_snapshot_t: nil, last_moment: nil]
 
   @doc """
   Returns a recorder, or nil if recording is off.
@@ -51,13 +52,13 @@ defmodule IndoorsExperiments.Vision.Recorder do
     recorder = ensure_folder(recorder)
     append_line(recorder, "frames.jsonl", frame_line(meta, result, byte_size(jpeg)))
 
-    level = get_in(result, [:decision, :level])
+    moment = moment(result)
 
-    if snapshot_due?(recorder, meta["t"], level) do
+    if snapshot_due?(recorder, meta["t"], moment) do
       save_snapshot(recorder, jpeg, meta, result)
-      %{recorder | last_snapshot_t: meta["t"], last_level: level}
+      %{recorder | last_snapshot_t: meta["t"], last_moment: moment}
     else
-      %{recorder | last_level: level}
+      %{recorder | last_moment: moment}
     end
   end
 
@@ -104,9 +105,14 @@ defmodule IndoorsExperiments.Vision.Recorder do
     File.ln_s(Path.basename(dir), link)
   end
 
-  defp snapshot_due?(%{last_snapshot_t: nil}, _t, _level), do: true
-  defp snapshot_due?(%{last_level: previous}, _t, level) when previous != level, do: true
-  defp snapshot_due?(%{last_snapshot_t: last}, t, _level), do: t - last >= @snapshot_every_ms
+  # A snapshot is taken whenever this changes.
+  defp moment(%{decision: decision}), do: decision.level
+  defp moment(%{hunt: hunt}), do: {hunt.phase, hunt.target.class}
+  defp moment(_error), do: :error
+
+  defp snapshot_due?(%{last_snapshot_t: nil}, _t, _moment), do: true
+  defp snapshot_due?(%{last_moment: previous}, _t, moment) when previous != moment, do: true
+  defp snapshot_due?(%{last_snapshot_t: last}, t, _moment), do: t - last >= @snapshot_every_ms
 
   # Drawing and saving images takes a few milliseconds, so do it in a separate
   # process: the channel can reply to the browser straight away.
@@ -134,6 +140,7 @@ defmodule IndoorsExperiments.Vision.Recorder do
       frame: result[:frame],
       error: result[:error],
       decision: result[:decision],
+      hunt: result[:hunt],
       tracks: result[:tracks]
     }
   end

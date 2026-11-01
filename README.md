@@ -1,9 +1,14 @@
 # Indoor Vision
 
-A small, readable version of the bike-vision architecture that you can run at home.
-Point a camera down a hallway and walk towards it: the server detects you, tracks
-you across frames, works out which half of the "path" you're in, and decides
-`CLEAR`, `CAUTION` or `YIELD`.
+A small, readable version of the bike-vision architecture that you can run at home,
+with two experiments built on the same pipeline:
+
+- **Hallway** (`/`): point a camera down a hallway and walk towards it. The server
+  detects you, tracks you across frames, works out which half of the "path" you're
+  in, and decides `CLEAR`, `CAUTION` or `YIELD`.
+- **Scavenger hunt** (`/hunt`): the game names a household object ("find a cup ☕")
+  and you hunt for it with your phone. It only counts once the tracker has followed
+  the same object across several frames, so a one-frame false detection doesn't score.
 
 ```
 capture  ->  perception  ->  tracking  ->  path understanding  ->  decision
@@ -33,7 +38,8 @@ mix phx.server
 ```
 
 Open <http://localhost:4000>, press **Start camera**, and walk towards it.
-**Use a video file** runs the same pipeline on a recorded clip.
+**Video file** runs the same pipeline on a recorded clip. **Focus view** fills the
+screen with the camera and a heads-up display, which is the way to use it on a phone.
 
 ### On your phone (Tailscale)
 
@@ -56,28 +62,34 @@ Cloudflare, adding latency.
 
 ## Reading the code
 
-Start with `Pipeline`, which calls each stage in order. Every module explains
-itself at the top.
+Start with `Pipeline` (hallway) and `HuntPipeline` (scavenger hunt), which call
+each stage in order. Compare the two: the first stages are identical and only the
+end is swapped. Every module explains itself at the top.
 
 | Stage | File | What it does |
 |---|---|---|
 | Capture | `assets/js/vision/camera.js` | Webcam/video → JPEG |
 | | `assets/js/vision/orientation.js` | Phone tilt, level indicator |
 | | `assets/js/vision/connection.js` | Binary frame push over the channel |
-| | `assets/js/vision/index.js` | The frame loop (one frame in flight at a time) |
-| | `assets/js/vision/overlay.js` | Draws lane, guides, boxes |
-| Transport | `lib/indoors_experiments_web/channels/vision_channel.ex` | One process per browser tab; holds the session's state |
+| | `assets/js/vision/session.js` | Buttons, the frame loop (one frame in flight at a time), latency stats |
+| | `assets/js/vision/viewer.js` | Sharp overlay drawing at screen resolution, focus mode |
+| | `assets/js/vision/bike_page.js`, `bike_overlay.js` | Hallway page: lane, guides, decision |
+| | `assets/js/vision/hunt_page.js`, `hunt_overlay.js` | Hunt page: target, lock-on, score |
+| Transport | `lib/indoors_experiments_web/channels/vision_channel.ex`, `hunt_channel.ex` | One process per browser tab; holds the session's state |
+| | `…/channels/frame_message.ex` | The binary frame format |
 | Perception | `lib/indoors_experiments/vision/detector.ex` | Loads the model, runs JPEG → detections |
 | | `…/vision/preprocess.ex` | Decode, letterbox, → `{1,3,640,640}` |
 | | `…/vision/yolo_decoder.ex` | `{1,84,8400}` → boxes (threshold, NMS, undo letterbox) |
 | Tracking | `…/vision/tracker.ex` | Match boxes across frames, measure growth = approaching |
 | Path | `…/vision/zones.ex` | Which half of the lane is an object standing in? |
 | Decision | `…/vision/decision.ex` | Rules, then hysteresis so it doesn't flicker |
+| Game | `…/vision/hunt.ex` | The hunt's rules: targets, lock-on, scoring (replaces Zones + Decision) |
 | Debugging | `…/vision/recorder.ex`, `annotate.ex`, `session_report.ex` | Session recordings and reports |
 
-The numbers worth tuning (thresholds, lane shape, frames to switch) are module
-attributes at the top of `tracker.ex`, `zones.ex`, `decision.ex` and
-`yolo_decoder.ex`.
+The numbers worth tuning (thresholds, lane shape, frames to switch, frames to
+lock on) are module attributes at the top of `tracker.ex`, `zones.ex`,
+`decision.ex`, `hunt.ex` and `yolo_decoder.ex`. `/hunt?target=cup` starts the hunt
+with a chosen target, which is handy for testing.
 
 ## Recordings and reports
 
@@ -87,12 +99,15 @@ points at the newest):
 - `frames.jsonl`: every frame's metadata, tracks, decision and timings
 - `events.jsonl`: browser-side errors and camera details
 - `snapshots/` and `annotated/`: about one frame per second plus every decision
-  change, raw and with the overlay drawn on
+  change (or hunt find / new target), raw and with the overlay drawn on
 - `latest.jpg`: the most recent annotated frame
 
 ```bash
 mix vision.report         # summary of the newest session + contact_sheet.jpg
 ```
+
+For hunt sessions the report lists each target, whether and how fast it was
+found, and what the model was seeing instead.
 
 The raw `snapshots/` folder is also the start of a dataset for the bike model.
 

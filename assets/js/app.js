@@ -24,7 +24,8 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/indoors_experiments"
 import topbar from "../vendor/topbar"
-import {startVisionPage} from "./vision"
+import {startBikePage} from "./vision/bike_page"
+import {startHuntPage} from "./vision/hunt_page"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
@@ -41,9 +42,12 @@ window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 // connect if there are any LiveViews on the page
 liveSocket.connect()
 
-// The camera page (page_html/home.html.heex) streams over its own channel.
-const visionRoot = document.getElementById("vision-app")
-if (visionRoot) startVisionPage(visionRoot)
+// The experiment pages stream over their own channels (see assets/js/vision/).
+const bikeRoot = document.getElementById("vision-app")
+if (bikeRoot) startBikePage(bikeRoot)
+
+const huntRoot = document.getElementById("hunt-app")
+if (huntRoot) startHuntPage(huntRoot)
 
 // expose liveSocket on window for web console debug logs and latency simulation:
 // >> liveSocket.enableDebug()

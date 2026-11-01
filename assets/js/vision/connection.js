@@ -1,18 +1,19 @@
 // Talks to IndoorsExperimentsWeb.VisionChannel over a Phoenix Channel (a WebSocket).
 import {Socket} from "phoenix"
 
-// Join a channel for this tab. Resolves with the server's join reply,
-// which includes the lane outline to draw.
+// Join a channel for this tab. `topic` picks the experiment ("vision" for
+// the bike/hallway page, "hunt" for the scavenger hunt). Resolves with the
+// server's join reply.
 //
 // `clientInfo` (browser, screen size...) is saved with the session recording,
 // so we know what device a recording came from.
-export function connect(clientInfo) {
+export function connect(topic, clientInfo) {
   const socket = new Socket("/socket")
   socket.connect()
 
   // Every tab gets its own session id, and so its own tracker on the server.
   const sessionId = crypto.randomUUID?.() ?? String(Math.random()).slice(2)
-  const channel = socket.channel(`vision:${sessionId}`, clientInfo)
+  const channel = socket.channel(`${topic}:${sessionId}`, clientInfo)
 
   return new Promise((resolve, reject) => {
     channel

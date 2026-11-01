@@ -1,0 +1,142 @@
+<Layouts.app flash={@flash} current_page={:hunt}>
+  <%!--
+    Driven by assets/js/vision/hunt_page.js (plus the shared session.js).
+    The ids below are how the JS finds each element.
+  --%>
+  <div id="hunt-app" class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+    <section class="space-y-4">
+      <.camera_stage>
+        <:empty>
+          <div class="max-w-sm space-y-2 px-6 text-center">
+            <p class="text-4xl">🔎</p>
+            <p class="text-sm font-medium text-slate-300">Scavenger hunt</p>
+            <p class="text-xs leading-relaxed text-slate-500">
+              You'll be asked to find something around the house. Point the camera at it
+              and hold steady until it locks on. Tip: Focus view makes this much easier on a phone.
+            </p>
+          </div>
+        </:empty>
+        <:hud>
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="flex items-center gap-3 rounded-2xl bg-black/50 py-1.5 pr-4 pl-2 ring-1 ring-white/15 backdrop-blur">
+              <span id="hud-target-emoji" class="text-3xl leading-none">🔎</span>
+              <span class="leading-tight">
+                <span class="block text-[11px] tracking-widest text-amber-200/80 uppercase">
+                  Find
+                </span>
+                <span id="hud-target-name" class="block text-lg font-bold text-white">…</span>
+              </span>
+            </span>
+            <span class="rounded-full bg-black/50 px-3 py-1 font-mono text-sm text-white/90 ring-1 ring-white/15 backdrop-blur">
+              <span id="hud-timer">0.0</span>s · <span id="hud-score">0</span> pts
+            </span>
+            <button
+              id="hud-skip"
+              type="button"
+              class="pointer-events-auto rounded-full bg-black/50 px-3 py-1 text-sm text-white/80 ring-1 ring-white/15 backdrop-blur transition hover:bg-black/70"
+            >
+              Skip
+            </button>
+          </div>
+          <div class="mt-2 h-1.5 w-56 max-w-full overflow-hidden rounded-full bg-white/15">
+            <div
+              id="hud-lock-bar"
+              class="h-full w-0 rounded-full bg-amber-300 transition-[width] duration-200"
+            >
+            </div>
+          </div>
+        </:hud>
+      </.camera_stage>
+
+      <.camera_controls />
+      <.status_line />
+    </section>
+
+    <aside class="space-y-4">
+      <%!-- Current target --%>
+      <div
+        id="hunt-target"
+        class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-amber-400/15 to-orange-500/5 p-5 ring-1 ring-amber-300/30"
+      >
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <p class="text-[11px] font-semibold tracking-[0.2em] text-amber-200/80 uppercase">
+              Find
+            </p>
+            <p id="hunt-target-name" class="mt-1 text-3xl font-black tracking-tight text-white">
+              …
+            </p>
+            <p class="mt-1 text-sm text-amber-100/70">
+              <span id="hunt-target-points">–</span>
+              · <span id="hunt-timer" class="font-mono">0.0</span>s
+            </p>
+          </div>
+          <span
+            id="hunt-target-emoji"
+            class="text-6xl leading-none drop-shadow-lg transition-transform duration-300"
+          >
+            🔎
+          </span>
+        </div>
+
+        <div class="mt-4">
+          <div class="flex items-center justify-between text-[11px] text-amber-100/60">
+            <span>Lock-on</span>
+            <span id="hunt-lock-label">not seen yet</span>
+          </div>
+          <div class="mt-1 h-2 overflow-hidden rounded-full bg-black/30">
+            <div
+              id="hunt-lock-bar"
+              class="h-full w-0 rounded-full bg-gradient-to-r from-amber-300 to-orange-400 transition-[width] duration-200"
+            >
+            </div>
+          </div>
+        </div>
+
+        <button
+          id="hunt-skip"
+          type="button"
+          class="mt-4 inline-flex items-center gap-1.5 text-sm text-amber-100/70 transition hover:text-white"
+        >
+          <.icon name="hero-forward-mini" class="size-4" /> Skip this one
+        </button>
+      </div>
+
+      <%!-- What the model sees right now: explains why something isn't locking on. --%>
+      <div class="rounded-2xl bg-white/[0.03] p-5 ring-1 ring-white/10">
+        <p class="text-[11px] font-semibold tracking-[0.2em] text-slate-500 uppercase">
+          Seeing right now
+        </p>
+        <p id="hunt-seeing-empty" class="mt-3 text-sm text-slate-500">Nothing yet.</p>
+        <ul id="hunt-seeing" class="mt-3 flex flex-wrap gap-2 text-sm"></ul>
+      </div>
+
+      <%!-- Score --%>
+      <div class="rounded-2xl bg-white/[0.03] p-5 ring-1 ring-white/10">
+        <div class="flex items-baseline justify-between">
+          <p class="text-[11px] font-semibold tracking-[0.2em] text-slate-500 uppercase">Score</p>
+          <p class="text-sm text-slate-400">
+            <span id="hunt-score" class="text-2xl font-black text-white tabular-nums">0</span> pts
+          </p>
+        </div>
+        <p id="hunt-found-empty" class="mt-3 text-sm text-slate-500">No finds yet.</p>
+        <ul id="hunt-found-list" class="mt-3 space-y-2 text-sm"></ul>
+      </div>
+
+      <.latency_panel />
+    </aside>
+  </div>
+
+  <%!-- "Found it!" pop-up. Fixed so it shows in focus view too. --%>
+  <div
+    id="hunt-celebrate"
+    class="pointer-events-none fixed inset-0 z-[60] hidden place-items-center"
+    aria-live="polite"
+  >
+    <div class="celebrate-pop rounded-3xl bg-black/70 px-10 py-8 text-center ring-1 ring-amber-300/40 backdrop-blur">
+      <p id="hunt-celebrate-emoji" class="text-7xl">🎉</p>
+      <p class="mt-2 text-3xl font-black text-white">Found it!</p>
+      <p id="hunt-celebrate-detail" class="mt-1 text-amber-200">+1 point</p>
+    </div>
+  </div>
+</Layouts.app>

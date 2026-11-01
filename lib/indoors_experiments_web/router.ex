@@ -18,6 +18,7 @@ defmodule IndoorsExperimentsWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+    get "/hunt", PageController, :hunt
   end
 
   # Other scopes may use custom stacks.

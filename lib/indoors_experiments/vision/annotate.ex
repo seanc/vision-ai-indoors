@@ -10,8 +10,12 @@ defmodule IndoorsExperiments.Vision.Annotate do
 
   On top of the overlay, each image gets two text bars:
 
-    * top: the decision, its confidence and the reason
+    * top: the hallway decision (confidence and reason), or the hunt's
+      target, lock-on and score
     * bottom: frame number, timings and phone tilt
+
+  It handles results from both experiments: hallway tracks have a `:zone`,
+  hunt tracks have a `:target` flag, and only the hallway has a lane.
   """
 
   # Evision colours are {blue, green, red}, not RGB.
@@ -27,11 +31,14 @@ defmodule IndoorsExperiments.Vision.Annotate do
     yield: {94, 63, 244}
   }
 
+  @hunt_colours %{target: {36, 191, 251}, found: {153, 211, 52}, other: {200, 200, 200}}
+
   @font Evision.Constant.cv_FONT_HERSHEY_SIMPLEX()
 
   @doc """
   Returns a new JPEG with the overlay drawn on it. `result` is the map
-  `Pipeline.process/3` returns, `meta` is the frame's metadata from the browser.
+  `Pipeline.process/3` (or `HuntPipeline.process/3`) returns, `meta` is the
+  frame's metadata from the browser, `lane` is the hallway lane (nil for the hunt).
   """
   def draw(jpeg, result, meta, lane) do
     image = Evision.imdecode(jpeg, Evision.Constant.cv_IMREAD_COLOR())
@@ -39,7 +46,7 @@ defmodule IndoorsExperiments.Vision.Annotate do
 
     image
     |> draw_lane(lane, width, height)
-    |> draw_tracks(result[:tracks] || [], result[:decision])
+    |> draw_tracks(result[:tracks] || [], result)
     |> draw_top_bar(result, width)
     |> draw_bottom_bar(result, meta, width, height)
     |> then(&Evision.imencode(".jpg", &1))
@@ -47,6 +54,8 @@ defmodule IndoorsExperiments.Vision.Annotate do
 
   # The trapezoid from Zones, with a centre line. Outlines only, so the
   # picture underneath stays visible.
+  defp draw_lane(image, nil, _width, _height), do: image
+
   defp draw_lane(image, lane, width, height) do
     to_pixels = fn [x, y] -> {round(x * width), round(y * height)} end
     [top_left, top_right, bottom_right, bottom_left] = Enum.map(lane.polygon, to_pixels)
@@ -62,19 +71,12 @@ defmodule IndoorsExperiments.Vision.Annotate do
     |> Evision.line(top_center, bottom_center, {255, 255, 255}, thickness: 1)
   end
 
-  defp draw_tracks(image, tracks, decision) do
-    cause_id = decision && decision.track_id
-
+  defp draw_tracks(image, tracks, result) do
     Enum.reduce(tracks, image, fn track, image ->
       box = track.box
-      colour = Map.get(@zone_colours, track.zone, @zone_colours.off_path)
-      thickness = if track.id == cause_id, do: 4, else: 2
+      {colour, thickness, label} = track_style(track, result)
       top_left = {round(box.x1), round(box.y1)}
       foot = {round((box.x1 + box.x2) / 2), round(box.y2)}
-
-      label =
-        "#{track.class} ##{track.id} #{round(track.score * 100)}% " <>
-          "#{signed_percent(track.growth_per_s)}/s"
 
       image
       |> Evision.rectangle(top_left, {round(box.x2), round(box.y2)}, colour, thickness: thickness)
@@ -84,11 +86,49 @@ defmodule IndoorsExperiments.Vision.Annotate do
     end)
   end
 
+  # Hallway track: coloured by zone, thick if it caused the decision.
+  defp track_style(%{zone: zone} = track, result) do
+    colour = Map.get(@zone_colours, zone, @zone_colours.off_path)
+    thickness = if track.id == result.decision.track_id, do: 4, else: 2
+
+    label =
+      "#{track.class} ##{track.id} #{round(track.score * 100)}% " <>
+        "#{signed_percent(track.growth_per_s)}/s"
+
+    {colour, thickness, label}
+  end
+
+  # Hunt track: amber if it's the target class, green once found, grey otherwise.
+  defp track_style(%{target: true} = track, %{hunt: hunt}) do
+    found? = hunt.phase == :found and track.id == hunt.locked_track_id
+    colour = if found?, do: @hunt_colours.found, else: @hunt_colours.target
+    label = "#{track.class} ##{track.id} #{round(track.score * 100)}% seen #{track.age}x"
+    {colour, 4, label}
+  end
+
+  defp track_style(track, _result) do
+    {@hunt_colours.other, 1, "#{track.class} #{round(track.score * 100)}%"}
+  end
+
   defp draw_top_bar(image, %{decision: decision}, width) do
     colour = Map.fetch!(@decision_colours, decision.level)
 
     text =
       "#{decision.level |> to_string() |> String.upcase()} #{round(decision.confidence * 100)}%  #{decision.reason}"
+
+    image
+    |> Evision.rectangle({0, 0}, {width, 24}, colour, thickness: -1)
+    |> Evision.putText(text, {6, 17}, @font, 0.5, {20, 20, 20}, thickness: 1)
+  end
+
+  defp draw_top_bar(image, %{hunt: hunt}, width) do
+    {colour, status} =
+      if hunt.phase == :found,
+        do: {@hunt_colours.found, "FOUND"},
+        else: {@hunt_colours.target, "lock #{round(hunt.lock * 100)}%"}
+
+    text =
+      "FIND #{hunt.target.class}  #{status}  #{hunt.seconds_hunting}s  score #{hunt.score}"
 
     image
     |> Evision.rectangle({0, 0}, {width, 24}, colour, thickness: -1)

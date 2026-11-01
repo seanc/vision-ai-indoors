@@ -31,6 +31,8 @@ defmodule IndoorsExperimentsWeb.Layouts do
     default: nil,
     doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
 
+  attr :current_page, :atom, default: nil, doc: "which experiment tab to highlight"
+
   slot :inner_block, required: true
 
   def app(assigns) do
@@ -45,19 +47,26 @@ defmodule IndoorsExperimentsWeb.Layouts do
             <span>
               <span class="block text-sm font-semibold tracking-tight">Indoor Vision</span>
               <span class="block text-xs text-slate-400">
-                Architecture test bench for the bike project
+                Phone camera experiments on the bike-vision pipeline
               </span>
             </span>
           </a>
-          <ol class="flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
-            <li
-              :for={{stage, index} <- Enum.with_index(~w(capture perception tracking path decision))}
-              class="flex items-center gap-1.5"
+          <nav class="flex items-center gap-1 rounded-xl bg-white/5 p-1 ring-1 ring-white/10">
+            <a
+              :for={{page, label, href} <- experiments()}
+              id={"nav-#{page}"}
+              href={href}
+              class={[
+                "rounded-lg px-3 py-1.5 text-sm font-medium transition",
+                if(page == @current_page,
+                  do: "bg-white/10 text-white shadow",
+                  else: "text-slate-400 hover:text-slate-200"
+                )
+              ]}
             >
-              <span :if={index > 0} class="text-slate-600">→</span>
-              <span class="rounded-full bg-white/5 px-2.5 py-1 ring-1 ring-white/10">{stage}</span>
-            </li>
-          </ol>
+              {label}
+            </a>
+          </nav>
         </div>
       </header>
 
@@ -68,6 +77,14 @@ defmodule IndoorsExperimentsWeb.Layouts do
       <.flash_group flash={@flash} />
     </div>
     """
+  end
+
+  # The experiment pages, for the tabs in the header.
+  defp experiments do
+    [
+      {:hallway, "Hallway", ~p"/"},
+      {:hunt, "Scavenger hunt", ~p"/hunt"}
+    ]
   end
 
   @doc """

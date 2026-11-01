@@ -25,13 +25,14 @@ defmodule IndoorsExperiments.Vision.SessionReport do
     text =
       [
         # `latest` is a symlink, so show the folder it points at.
-        "Session #{dir |> Path.expand() |> real_path() |> Path.basename()}",
+        "Session #{dir |> Path.expand() |> real_path() |> Path.basename()} (#{session["experiment"] || "hallway"})",
         device_section(session, events),
         frames_section(frames),
         latency_section(frames),
         orientation_section(frames),
         tracks_section(frames),
         decision_section(frames),
+        hunt_section(frames),
         problems_section(frames, events),
         if(sheet, do: "Contact sheet: #{sheet}", else: "Contact sheet: no snapshots yet")
       ]
@@ -151,12 +152,14 @@ defmodule IndoorsExperiments.Vision.SessionReport do
     end
   end
 
-  defp decision_section([]), do: []
-
   defp decision_section(frames) do
-    start_t = hd(frames)["t"]
-    decided = Enum.filter(frames, & &1["decision"])
+    case Enum.filter(frames, & &1["decision"]) do
+      [] -> []
+      decided -> decision_timeline(decided, hd(frames)["t"])
+    end
+  end
 
+  defp decision_timeline(decided, start_t) do
     changes =
       decided
       |> Enum.chunk_by(& &1["decision"]["level"])
@@ -174,6 +177,56 @@ defmodule IndoorsExperiments.Vision.SessionReport do
       end)
 
     ["", "Decision timeline", Enum.take(changes, 40), "  time in each: #{share}"]
+  end
+
+  # One block per target: was it found, how long it took, how close the
+  # lock-on got, and what the model was seeing instead (handy for spotting
+  # "it kept calling my mug a bowl").
+  defp hunt_section(frames) do
+    case Enum.filter(frames, & &1["hunt"]) do
+      [] ->
+        []
+
+      hunting ->
+        rounds =
+          hunting
+          |> Enum.chunk_by(& &1["hunt"]["target"]["class"])
+          |> Enum.map(&hunt_round/1)
+
+        last = List.last(hunting)["hunt"]
+
+        [
+          "",
+          "Scavenger hunt: #{last["found_count"]} found, #{last["skipped"]} skipped, score #{last["score"]}"
+          | rounds
+        ]
+    end
+  end
+
+  defp hunt_round([first | _] = frames) do
+    target = first["hunt"]["target"]["class"]
+    found = Enum.find(frames, &(&1["hunt"]["phase"] == "found"))
+    best_lock = frames |> Enum.map(& &1["hunt"]["lock"]) |> Enum.max()
+
+    others =
+      for(
+        frame <- frames,
+        track <- frame["tracks"] || [],
+        track["class"] != target,
+        do: track["class"]
+      )
+      |> Enum.frequencies()
+      |> Enum.sort_by(fn {_class, count} -> -count end)
+      |> Enum.take(4)
+      |> Enum.map_join(", ", fn {class, count} -> "#{class} (#{count})" end)
+
+    outcome =
+      if found,
+        do: "FOUND in #{found["hunt"]["seconds_hunting"]}s",
+        else: "not found (#{length(frames)} frames, best lock #{round(best_lock * 100)}%)"
+
+    "  #{String.pad_trailing(target, 14)} #{outcome}" <>
+      if(others == "", do: "", else: "\n      also seen: #{others}")
   end
 
   defp problems_section(frames, events) do

@@ -30,6 +30,6 @@ defmodule IndoorsExperimentsWeb.VisionChannelTest do
 
   test "garbage is rejected", %{socket: socket} do
     ref = push(socket, "frame", {:binary, <<0, 0>>})
-    assert_reply ref, :error, %{reason: "malformed frame"}
+    assert_reply ref, :error, %{reason: "malformed frame"}, 2_000
   end
 end

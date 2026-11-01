@@ -103,3 +103,16 @@
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
 /* This file is for your main application CSS */
+
+/* Scavenger hunt: the "Found it!" card pops in, holds, then fades. */
+@keyframes celebrate-pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  15% { transform: scale(1.08); opacity: 1; }
+  25% { transform: scale(1); }
+  85% { opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0; }
+}
+
+.celebrate-pop {
+  animation: celebrate-pop 2.2s ease-out both;
+}

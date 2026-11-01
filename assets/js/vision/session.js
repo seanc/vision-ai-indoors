@@ -1,18 +1,25 @@
-// The camera page. Wires the pieces together and runs the frame loop:
+// Everything a camera page needs, whatever the experiment:
 //
-//   grab a frame -> send it -> wait for the reply -> remember it -> repeat
+//   * join a channel on the server
+//   * the Start camera / video file / Stop buttons
+//   * the frame loop: grab a frame -> send it -> wait for the reply -> repeat
+//   * the latency numbers, status line and error reporting
+//
+// Each experiment page (bike_page.js, hunt_page.js) calls `startSession` and
+// only has to draw its own results in `onResult` / `onDraw`.
 //
 // Only one frame is ever in flight. If the server takes 150ms, we simply
 // send fewer frames, instead of queueing up a backlog that makes the
 // overlay fall further and further behind the video.
 import {captureJpeg, startCamera, startVideoFile, stopVideo} from "./camera"
 import {connect, sendFrame, sendLog} from "./connection"
-import {drawOverlay} from "./overlay"
 import {requestOrientationPermission, watchOrientation} from "./orientation"
+import {setupFocusMode} from "./viewer"
 
-export function startVisionPage(root) {
+export function startSession(root, {topic, joinParams = {}, onJoin = () => {}, onResult = () => {}, onDraw = () => {}}) {
   const $ = id => root.querySelector(`#${id}`)
   const el = {
+    stage: $("stage"),
     video: $("video"),
     overlay: $("overlay"),
     captureCanvas: $("capture-canvas"),
@@ -22,10 +29,7 @@ export function startVisionPage(root) {
     stop: $("stop"),
     fps: $("fps-select"),
     status: $("status"),
-    decision: $("decision"),
-    decisionLevel: $("decision-level"),
-    decisionReason: $("decision-reason"),
-    decisionConfidence: $("decision-confidence"),
+    timeline: $("latency-bar"),
     stats: {
       fps: $("stat-fps"),
       roundTrip: $("stat-round-trip"),
@@ -34,19 +38,15 @@ export function startVisionPage(root) {
       size: $("stat-size"),
       frame: $("stat-frame"),
     },
-    timeline: $("latency-bar"),
-    tracks: $("track-list"),
-    tracksEmpty: $("track-list-empty"),
-    level: $("level"),
   }
 
   const orientation = watchOrientation()
   const state = {
     channel: null,
-    lane: null,
     running: false,
     seq: 0,
     lastResult: null,
+    // Size of the last frame we sent; the server's boxes are in these pixels.
     lastFrame: null,
     doneTimes: [],
     // The browser's own timings for the last frame. Sent along with the next
@@ -54,21 +54,23 @@ export function startVisionPage(root) {
     lastClientStats: null,
   }
 
-  connect(clientInfo())
+  connect(topic, {...clientInfo(), ...joinParams})
     .then(({channel, joinReply}) => {
       state.channel = channel
-      state.lane = joinReply.lane
       const recording = joinReply.recording ? " (recording to tmp/sessions)" : ""
       setStatus(
         joinReply.model_ready ? `Connected, model loaded${recording}` : "Connected, but no model: run scripts/export_yolo.sh",
         joinReply.model_ready,
       )
+      onJoin(joinReply)
     })
     .catch(() => setStatus("Could not connect to the server", false))
 
   // Anything that blows up in the page gets reported to the server too.
   window.addEventListener("error", event => sendLog(state.channel, "error", event.message, {source: event.filename, line: event.lineno}))
   window.addEventListener("unhandledrejection", event => sendLog(state.channel, "error", String(event.reason)))
+
+  setupFocusMode(el.stage, root.querySelectorAll("[data-focus-toggle]"))
 
   el.startCamera.addEventListener("click", async () => {
     // Ask for the camera BEFORE waiting on the motion-sensor prompt: on iOS a
@@ -100,12 +102,9 @@ export function startVisionPage(root) {
   })
 
   // Redraw the overlay every screen refresh using the latest result we have,
-  // so the guides and level line stay live between replies.
+  // so it keeps up with resizes and focus mode between replies.
   const redraw = () => {
-    if (state.lastFrame) {
-      drawOverlay(el.overlay, {...state.lastFrame, lane: state.lane, result: state.lastResult, level: orientation.level()})
-    }
-    renderLevel(orientation.level())
+    onDraw({state, el, orientation})
     requestAnimationFrame(redraw)
   }
   requestAnimationFrame(redraw)
@@ -145,6 +144,7 @@ export function startVisionPage(root) {
 
       state.lastResult = result
       state.lastFrame = {width, height}
+      renderStats(result, {captureMs, roundTripMs, bytes: jpeg.byteLength})
       state.lastClientStats = {
         round_trip_ms: Math.round(roundTripMs),
         capture_ms: Math.round(captureMs),
@@ -152,49 +152,33 @@ export function startVisionPage(root) {
         video_size: [el.video.videoWidth, el.video.videoHeight],
         sent_size: [width, height],
       }
-      renderResult(result, {captureMs, roundTripMs, bytes: jpeg.byteLength})
+
+      if (result.error) {
+        setStatus(result.error === "no_model" ? "No model loaded: run scripts/export_yolo.sh" : `Server: ${result.error}`, false)
+      } else {
+        onResult(result)
+      }
     } catch (error) {
       setStatus(`Frame failed: ${error.message ?? error.reason ?? "unknown error"}`, false)
     }
   }
 
-  // --- Rendering the side panel ---------------------------------------------
+  // --- Latency panel ------------------------------------------------------------
 
-  function renderResult(result, {captureMs, roundTripMs, bytes}) {
+  function renderStats(result, {captureMs, roundTripMs, bytes}) {
     const now = performance.now()
     state.doneTimes = [...state.doneTimes.filter(t => now - t < 1000), now]
 
-    el.stats.fps.textContent = state.doneTimes.length
-    el.stats.roundTrip.textContent = `${Math.round(roundTripMs)} ms`
-    el.stats.server.textContent = `${Math.round(result.server_ms)} ms`
-    el.stats.model.textContent = result.timings ? `${Math.round(result.timings.model_ms)} ms` : "–"
-    el.stats.size.textContent = `${Math.round(bytes / 1024)} KB`
-    el.stats.frame.textContent = `#${result.frame_number}`
+    setText(el.stats.fps, state.doneTimes.length)
+    setText(el.stats.roundTrip, `${Math.round(roundTripMs)} ms`)
+    setText(el.stats.server, `${Math.round(result.server_ms)} ms`)
+    setText(el.stats.model, result.timings ? `${Math.round(result.timings.model_ms)} ms` : "–")
+    setText(el.stats.size, `${Math.round(bytes / 1024)} KB`)
+    setText(el.stats.frame, `#${result.frame_number}`)
 
-    if (result.error) {
-      setStatus(result.error === "no_model" ? "No model loaded: run scripts/export_yolo.sh" : `Server: ${result.error}`, false)
-      return
+    if (el.timeline && result.timings) {
+      renderTimeline({captureMs, roundTripMs, serverMs: result.server_ms, timings: result.timings})
     }
-
-    renderTimeline({captureMs, roundTripMs, serverMs: result.server_ms, timings: result.timings})
-    renderDecision(result.decision)
-    renderTracks(result.tracks)
-  }
-
-  const DECISION_STYLES = {
-    clear: {label: "CLEAR", classes: ["bg-emerald-500/15", "text-emerald-300", "ring-emerald-400/40"]},
-    caution: {label: "CAUTION", classes: ["bg-amber-500/15", "text-amber-300", "ring-amber-400/40"]},
-    yield: {label: "YIELD", classes: ["bg-rose-500/20", "text-rose-300", "ring-rose-400/50"]},
-  }
-
-  function renderDecision(decision) {
-    const style = DECISION_STYLES[decision.level]
-    Object.values(DECISION_STYLES).forEach(s => el.decision.classList.remove(...s.classes))
-    el.decision.classList.add(...style.classes)
-    el.decision.dataset.level = decision.level
-    el.decisionLevel.textContent = style.label
-    el.decisionReason.textContent = decision.reason
-    el.decisionConfidence.style.width = `${Math.round(decision.confidence * 100)}%`
   }
 
   // Where did this frame's time go? Each segment is a share of the full cycle.
@@ -217,43 +201,20 @@ export function startVisionPage(root) {
     }
   }
 
-  function renderTracks(tracks) {
-    el.tracksEmpty.classList.toggle("hidden", tracks.length > 0)
-    el.tracks.replaceChildren(
-      ...tracks.map(track => {
-        const row = document.createElement("li")
-        row.className = "flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-2 ring-1 ring-white/5"
-
-        const name = document.createElement("span")
-        name.className = "font-medium text-slate-200"
-        name.textContent = `${track.class} #${track.id}`
-
-        const detail = document.createElement("span")
-        detail.className = "font-mono text-xs text-slate-400"
-        const growth = `${track.growth_per_s >= 0 ? "+" : ""}${Math.round(track.growth_per_s * 100)}%/s`
-        detail.textContent = `${track.zone.replace("_", " ")} · ${growth}${track.approaching ? " ▲" : ""}`
-
-        row.append(name, detail)
-        return row
-      }),
-    )
-  }
-
-  function renderLevel(level) {
-    if (!level.available) {
-      el.level.textContent = "No motion sensor (laptop). Level check off."
-      el.level.className = "text-xs text-slate-500"
-    } else {
-      el.level.textContent = `roll ${level.roll.toFixed(0)}°  pitch ${level.pitch.toFixed(0)}°  ${level.level ? "level" : "tilt to level"}`
-      el.level.className = `text-xs font-mono ${level.level ? "text-emerald-300" : "text-rose-300"}`
-    }
-  }
-
   function setStatus(text, ok) {
     // Only report a problem once, not on every frame it keeps happening.
     if (!ok && el.status.textContent !== text) sendLog(state.channel, "warning", text)
     el.status.textContent = text
     el.status.dataset.ok = ok
+  }
+
+  return {
+    state,
+    el,
+    orientation,
+    // Send an extra event to this page's channel (e.g. "skip" in the hunt).
+    // Returns the Phoenix push, so callers can `.receive("ok", ...)`.
+    push: (event, payload = {}) => state.channel?.push(event, payload),
   }
 }
 
@@ -267,6 +228,10 @@ function clientInfo() {
     secure_context: window.isSecureContext,
     has_orientation_sensor: "DeviceOrientationEvent" in window,
   }
+}
+
+function setText(element, text) {
+  if (element) element.textContent = text
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
